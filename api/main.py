@@ -237,3 +237,182 @@ async def get_stats():
         "api_status": "running",
         "ml_model":   "XGBoost v1.0",
     }
+# ── 6. Feedback Submit ────────────────────────────────────────────
+class FeedbackRequest(BaseModel):
+    """Analyst ka verdict"""
+    transaction_id: str
+    analyst_id:     str
+    verdict:        str  # CONFIRMED_FRAUD / FALSE_POSITIVE / LEGITIMATE
+    notes:          Optional[str] = None
+
+@app.post("/api/v1/feedback")
+async def submit_feedback(request: FeedbackRequest):
+    """
+    Analyst feedback submit karo.
+    Yeh baad mein model retraining mein use hoga!
+    
+    Verdicts:
+    - CONFIRMED_FRAUD  → Sach mein fraud tha
+    - FALSE_POSITIVE   → Normal tha, wrongly flagged
+    - LEGITIMATE       → Legitimate transaction
+    """
+    import psycopg2
+    sys.path.insert(0, "../database")
+    from db_setup import get_connection
+
+    try:
+        conn = get_connection()
+        cur  = conn.cursor()
+
+        cur.execute("""
+            INSERT INTO analyst_feedback
+                (transaction_id, analyst_id, verdict, notes, created_at)
+            VALUES (%s, %s, %s, %s, NOW())
+        """, (
+            request.transaction_id,
+            request.analyst_id,
+            request.verdict,
+            request.notes,
+        ))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return {
+            "success": True,
+            "message": f"Feedback recorded: {request.verdict}",
+            "transaction_id": request.transaction_id,
+            "analyst_id":     request.analyst_id,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 7. Cases List ─────────────────────────────────────────────────
+@app.get("/api/v1/cases")
+async def list_cases():
+    """
+    Fraud cases list karo — HIGH aur CRITICAL transactions.
+    Analyst dashboard yeh use karega.
+    """
+    sys.path.insert(0, "../database")
+    from db_setup import get_connection
+
+    try:
+        conn = get_connection()
+        cur  = conn.cursor()
+
+        cur.execute("""
+            SELECT
+                transaction_id,
+                transaction_type,
+                amount,
+                sender_account,
+                city,
+                risk_score,
+                risk_tier,
+                created_at
+            FROM transactions
+            WHERE risk_tier IN ('HIGH', 'CRITICAL')
+            ORDER BY created_at DESC
+            LIMIT 50
+        """)
+
+        rows  = cur.fetchall()
+        cases = []
+
+        for row in rows:
+            tier = row[6]
+            # SLA calculate karo
+            sla_hours = 0.5 if tier == "CRITICAL" else 4
+            cases.append({
+                "transaction_id":   row[0],
+                "transaction_type": row[1],
+                "amount":           float(row[2]),
+                "sender":           row[3],
+                "city":             row[4],
+                "risk_score":       float(row[5]) if row[5] else 0,
+                "risk_tier":        tier,
+                "created_at":       str(row[7]),
+                "sla_hours":        sla_hours,
+                "action_required":  "BLOCK" if tier == "CRITICAL" else "HOLD",
+            })
+
+        cur.close()
+        conn.close()
+
+        return {
+            "total_cases": len(cases),
+            "cases":       cases,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 8. Single Transaction Detail ──────────────────────────────────
+@app.get("/api/v1/transaction/{transaction_id}")
+async def get_transaction(transaction_id: str):
+    """
+    Ek transaction ki poori detail lo.
+    Analyst case investigate karte waqt yeh use karega.
+    """
+    sys.path.insert(0, "../database")
+    from db_setup import get_connection
+
+    try:
+        conn = get_connection()
+        cur  = conn.cursor()
+
+        cur.execute("""
+            SELECT
+                transaction_id,
+                transaction_type,
+                amount,
+                sender_account,
+                receiver_account,
+                city,
+                risk_score,
+                risk_tier,
+                created_at
+            FROM transactions
+            WHERE transaction_id = %s
+        """, (transaction_id,))
+
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Transaction {transaction_id} not found"
+            )
+
+        tier = row[7]
+        recommendations = {
+            "LOW":      "APPROVE",
+            "MEDIUM":   "REVIEW",
+            "HIGH":     "HOLD",
+            "CRITICAL": "BLOCK",
+        }
+
+        return {
+            "transaction_id":   row[0],
+            "transaction_type": row[1],
+            "amount":           float(row[2]),
+            "sender":           row[3],
+            "receiver":         row[4],
+            "city":             row[5],
+            "risk_score":       float(row[6]) if row[6] else 0,
+            "risk_tier":        tier,
+            "recommendation":   recommendations.get(tier, "REVIEW"),
+            "created_at":       str(row[8]),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

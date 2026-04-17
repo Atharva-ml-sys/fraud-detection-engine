@@ -120,3 +120,14 @@ if __name__ == "__main__":
         print(f"{row[0]:<15} {row[1]:<12} ₹{row[2]:>9,.0f} {row[4] or '-':<12}")
 
     print(f"\n✅ Total {len(rows)} transactions database mein hain!")
+    # Feedback table
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS analyst_feedback (
+            id             SERIAL PRIMARY KEY,
+            transaction_id VARCHAR(100),
+            analyst_id     VARCHAR(100),
+            verdict        VARCHAR(30),
+            notes          TEXT,
+            created_at     TIMESTAMP DEFAULT NOW()
+        )
+    """)

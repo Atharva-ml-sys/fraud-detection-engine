@@ -54,8 +54,9 @@ def insert_transaction(txn: dict):
     cur.execute("""
         INSERT INTO transactions
             (transaction_id, transaction_type, amount,
-             sender_account, receiver_account, city)
-        VALUES (%s, %s, %s, %s, %s, %s)
+             sender_account, receiver_account, city,
+             risk_score, risk_tier)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (transaction_id) DO NOTHING
     """, (
         txn["id"],
@@ -64,6 +65,8 @@ def insert_transaction(txn: dict):
         txn["sender"],
         txn["receiver"],
         txn.get("city"),
+        txn.get("risk_score"),
+        txn.get("risk_tier"),
     ))
 
     conn.commit()
@@ -77,7 +80,8 @@ def get_all_transactions():
 
     cur.execute("""
         SELECT transaction_id, transaction_type,
-               amount, sender_account, city, created_at
+               amount, sender_account, city,
+               risk_score, risk_tier, created_at
         FROM transactions
         ORDER BY created_at DESC
     """)

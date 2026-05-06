@@ -181,12 +181,14 @@ async def score_transaction_endpoint(request: TransactionRequest):
 
     # DB save
     txn_data = {
-        "id":       txn_id,
-        "type":     request.transaction_type,
-        "amount":   request.amount,
-        "sender":   request.sender_account,
-        "receiver": request.receiver_account,
-        "city":     request.city,
+        "id":         txn_id,
+        "type":       request.transaction_type,
+        "amount":     request.amount,
+        "sender":     request.sender_account,
+        "receiver":   request.receiver_account,
+        "city":       request.city,
+        "risk_score": ml_result["risk_score"],
+        "risk_tier":  ml_result["risk_tier"],
     }
     insert_transaction(txn_data)
 
@@ -216,7 +218,9 @@ async def list_transactions(limit: int = 20):
             "amount":           float(row[2]),
             "sender":           row[3],
             "city":             row[4],
-            "created_at":       str(row[5]),
+            "risk_score":       float(row[5]) if row[5] else 0,
+            "risk_tier":        row[6] or "LOW",
+            "created_at":       str(row[7]),
         })
 
     return {

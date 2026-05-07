@@ -54,7 +54,6 @@ function SubmitForm({ onSuccess }) {
     setLoading(true);
     setError(null);
     setResult(null);
-
     try {
       const res = await fetch(`${API_URL}/api/v1/score`, {
         method:  'POST',
@@ -68,11 +67,9 @@ function SubmitForm({ onSuccess }) {
           receiver_risk: parseFloat(form.receiver_risk),
         }),
       });
-
       const data = await res.json();
       setResult(data);
       if (onSuccess) onSuccess();
-
     } catch (err) {
       setError('API error — chal rahi hai?');
     } finally {
@@ -92,12 +89,9 @@ function SubmitForm({ onSuccess }) {
       <div className="section-header">
         <h2>Submit Transaction for Scoring</h2>
       </div>
-
       <div style={{ padding: 24 }}>
         <form onSubmit={handleSubmit}>
           <div className="form-grid">
-
-            {/* Transaction Type */}
             <div className="form-group">
               <label>Transaction Type</label>
               <select name="transaction_type"
@@ -107,8 +101,6 @@ function SubmitForm({ onSuccess }) {
                   .map(t => <option key={t}>{t}</option>)}
               </select>
             </div>
-
-            {/* Amount */}
             <div className="form-group">
               <label>Amount (₹)</label>
               <input type="number" name="amount"
@@ -117,8 +109,6 @@ function SubmitForm({ onSuccess }) {
                 placeholder="e.g. 15000"
                 required />
             </div>
-
-            {/* Sender */}
             <div className="form-group">
               <label>Sender Account</label>
               <input type="text" name="sender_account"
@@ -127,8 +117,6 @@ function SubmitForm({ onSuccess }) {
                 placeholder="ACC_001"
                 required />
             </div>
-
-            {/* Receiver */}
             <div className="form-group">
               <label>Receiver Account</label>
               <input type="text" name="receiver_account"
@@ -137,8 +125,6 @@ function SubmitForm({ onSuccess }) {
                 placeholder="ACC_002"
                 required />
             </div>
-
-            {/* City */}
             <div className="form-group">
               <label>City</label>
               <input type="text" name="city"
@@ -146,8 +132,6 @@ function SubmitForm({ onSuccess }) {
                 onChange={handleChange}
                 placeholder="Mumbai" />
             </div>
-
-            {/* Geo Distance */}
             <div className="form-group">
               <label>Geo Distance (km)</label>
               <input type="number" name="geo_distance"
@@ -155,8 +139,6 @@ function SubmitForm({ onSuccess }) {
                 onChange={handleChange}
                 placeholder="0" />
             </div>
-
-            {/* Device Seen */}
             <div className="form-group">
               <label>Device Seen Before?</label>
               <select name="device_seen"
@@ -166,8 +148,6 @@ function SubmitForm({ onSuccess }) {
                 <option value={0}>No (New Device)</option>
               </select>
             </div>
-
-            {/* New Receiver */}
             <div className="form-group">
               <label>New Receiver?</label>
               <select name="new_receiver"
@@ -177,8 +157,6 @@ function SubmitForm({ onSuccess }) {
                 <option value={1}>Yes (First time)</option>
               </select>
             </div>
-
-            {/* Receiver Risk */}
             <div className="form-group">
               <label>Receiver Risk (0-1)</label>
               <input type="number" name="receiver_risk"
@@ -187,10 +165,8 @@ function SubmitForm({ onSuccess }) {
                 step="0.01" min="0" max="1"
                 placeholder="0.01" />
             </div>
-
           </div>
 
-          {/* Submit Button */}
           <button type="submit"
             className="refresh-btn"
             disabled={loading}
@@ -199,14 +175,12 @@ function SubmitForm({ onSuccess }) {
           </button>
         </form>
 
-        {/* Error */}
         {error && (
           <div className="error" style={{ marginTop: 16 }}>
             ⚠️ {error}
           </div>
         )}
 
-        {/* Result */}
         {result && (
           <div style={{
             marginTop: 20,
@@ -256,12 +230,73 @@ function SubmitForm({ onSuccess }) {
             <div style={{ marginTop: 12, fontSize: 13, color: '#94A3B8' }}>
               {result.message}
             </div>
+
+            {result.explanation && result.explanation.top_reasons && (
+              <div style={{ marginTop: 16 }}>
+                <div style={{
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: '#94A3B8',
+                  marginBottom: 8,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                }}>
+                  🔍 Why was this flagged?
+                </div>
+                {result.explanation.top_reasons.map((reason, i) => (
+                  <div key={i} style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    padding: '8px 0',
+                    borderBottom: '1px solid #1E293B',
+                  }}>
+                    <div style={{
+                      width: 24,
+                      height: 24,
+                      borderRadius: '50%',
+                      background: '#334155',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: 11,
+                      fontWeight: 700,
+                      color: '#94A3B8',
+                      flexShrink: 0,
+                    }}>
+                      {reason.rank}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, color: '#F1F5F9' }}>
+                        {reason.description}
+                      </div>
+                      <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>
+                        Value: {reason.value}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{
+                        fontSize: 12,
+                        fontWeight: 600,
+                        color: reason.impact > 0 ? '#EF4444' : '#22C55E',
+                      }}>
+                        {reason.impact > 0 ? '+' : ''}{reason.impact.toFixed(1)}
+                      </div>
+                      <div style={{ fontSize: 10, color: '#64748B' }}>
+                        impact
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
     </div>
   );
 }
+
 
 // ── Cases Tab ─────────────────────────────────────────────────────
 function CasesTab() {

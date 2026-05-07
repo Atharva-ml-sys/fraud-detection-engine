@@ -29,7 +29,7 @@ sys.path.insert(0, "../simulator")
 
 from db_setup    import create_tables, insert_transaction, get_all_transactions
 from redis_setup import track_transaction, get_velocity, check_duplicate
-from inference   import load_model, score_transaction
+from inference   import load_model, score_transaction, explain_transaction 
 
 # ── App banao ─────────────────────────────────────────────────────
 app = FastAPI(
@@ -84,6 +84,7 @@ class ScoreResponse(BaseModel):
     fraud_prob:     float
     processing_ms:  int
     message:        str
+    explanation:    Optional[dict] = None
 
 # ── Endpoints ─────────────────────────────────────────────────────
 
@@ -168,6 +169,15 @@ async def score_transaction_endpoint(request: TransactionRequest):
     }
 
     ml_result = score_transaction(ml_model, txn_for_ml, velocity_for_ml)
+    # SHAP explanation — HIGH/CRITICAL ke liye
+    explanation = None
+    if ml_result["risk_tier"] in ["HIGH", "CRITICAL"]:
+        try:
+            explanation = explain_transaction(
+                ml_model, txn_for_ml, velocity_for_ml
+            )
+        except Exception as e:
+            explanation = None
 
     # Recommendation
     tier = ml_result["risk_tier"]
@@ -201,7 +211,8 @@ async def score_transaction_endpoint(request: TransactionRequest):
         recommendation = recommendation,
         fraud_prob     = ml_result["fraud_prob"],
         processing_ms  = processing_ms,
-        message        = f"Transaction {recommendation} — {tier} risk"
+        message        = f"Transaction {recommendation} — {tier} risk",
+        explanation    = explanation,
     )
 
 # 4. List Transactions

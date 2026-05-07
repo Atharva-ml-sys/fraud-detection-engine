@@ -143,6 +143,98 @@ def score_transaction(model, txn: dict, velocity: dict) -> dict:
         "fraud_prob": round(fraud_prob, 4),
     }
 
+# ── SHAP Explainability ───────────────────────────────────────────
+def explain_transaction(model, txn: dict, velocity: dict) -> dict:
+    """
+    SHAP se explain karo — kyun yeh transaction flag hua?
+    
+    Returns top 5 reasons with human-readable descriptions
+    """
+    import shap
+    import numpy as np
+
+    # Features banao
+    features = build_features(txn, velocity)
+
+    # SHAP TreeExplainer — XGBoost ke liye best
+    explainer   = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(features)
+
+    # SHAP values — har feature ka contribution
+    shap_vals = shap_values[0]  # first (only) sample
+
+    # Feature contributions sort karo
+    contributions = []
+    for i, (name, val) in enumerate(zip(FEATURE_NAMES, shap_vals)):
+        contributions.append({
+            "feature":      name,
+            "shap_value":   round(float(val), 4),
+            "feature_value": round(float(features[0][i]), 4),
+            "direction":    "increases_fraud" if val > 0 else "decreases_fraud",
+        })
+
+    # Sort by absolute SHAP value
+    contributions.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
+
+    # Human readable descriptions
+    descriptions = {
+        "amount_log":      "Transaction amount",
+        "amount_zscore":   "Amount vs account average",
+        "hour_of_day":     "Time of transaction",
+        "is_late_night":   "Late night transaction (11PM-5AM)",
+        "txn_type_enc":    "Transaction type",
+        "txn_count_1h":    "Number of transactions in last 1 hour",
+        "amount_sum_1h":   "Total amount in last 1 hour",
+        "new_receiver":    "First time sending to this receiver",
+        "amount_round":    "Suspicious round amount",
+        "geo_distance":    "Geographic distance from last transaction",
+        "device_seen":     "Device recognition",
+        "receiver_risk":   "Receiver fraud history",
+    }
+
+    # Top 5 reasons
+    top_reasons = []
+    for c in contributions[:5]:
+        name  = c["feature"]
+        val   = c["shap_value"]
+        fval  = c["feature_value"]
+        desc  = descriptions.get(name, name)
+
+        # Human readable value
+        if name == "geo_distance":
+            readable = f"{fval:.0f} km"
+        elif name == "txn_count_1h":
+            readable = f"{fval:.0f} transactions"
+        elif name == "amount_sum_1h":
+            readable = f"₹{fval:,.0f}"
+        elif name == "is_late_night":
+            readable = "Yes" if fval == 1 else "No"
+        elif name == "device_seen":
+            readable = "Known" if fval == 1 else "Unknown device"
+        elif name == "new_receiver":
+            readable = "Yes (first time)" if fval == 1 else "No"
+        elif name == "receiver_risk":
+            readable = f"{fval*100:.0f}% fraud history"
+        elif name == "amount_round":
+            readable = "Yes (suspicious)" if fval == 1 else "No"
+        else:
+            readable = f"{fval:.2f}"
+
+        top_reasons.append({
+            "rank":        len(top_reasons) + 1,
+            "feature":     name,
+            "description": desc,
+            "value":       readable,
+            "impact":      round(val * 100, 2),
+            "direction":   "🔴 Increases fraud risk" if val > 0 else "🟢 Decreases fraud risk",
+        })
+
+    return {
+        "top_reasons":     top_reasons,
+        "total_features":  len(FEATURE_NAMES),
+        "explanation":     f"Top {len(top_reasons)} factors driving this decision",
+    }
+
 # ── Test karo ─────────────────────────────────────────────────────
 if __name__ == "__main__":
     print("=" * 55)

@@ -3,6 +3,7 @@ import sys
 import os
 from datetime import datetime
 from typing import Optional
+from prometheus_fastapi_instrumentator import Instrumentator
 
 # ── Paths set karo — SABSE PEHLE ─────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -49,6 +50,9 @@ async def startup_event():
     create_tables()
     ml_model = load_model()
     print("✅ API ready! ML model loaded.")
+    
+# Prometheus metrics
+Instrumentator().instrument(app).expose(app)
 
 # ── Schemas ───────────────────────────────────────────────────────
 class TransactionRequest(BaseModel):

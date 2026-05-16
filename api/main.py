@@ -24,8 +24,12 @@ from db_setup    import create_tables, insert_transaction, get_all_transactions
 from redis_setup import track_transaction, get_velocity, check_duplicate
 from inference   import load_model, score_transaction, explain_transaction
 
-# GNN temporarily disabled — blocking issue fix karna hai
-GNN_AVAILABLE = False
+try:
+    from gnn_scorer import combined_score
+    GNN_AVAILABLE = True
+    print("✅ GNN scorer loaded!")
+except Exception:
+    GNN_AVAILABLE = False
 
 # ── App ───────────────────────────────────────────────────────────
 app = FastAPI(
@@ -125,9 +129,10 @@ async def health_check():
         "status":    "healthy",
         "timestamp": datetime.utcnow().isoformat(),
         "services": {
-            "api":            "up",
-            "ml_model":       "loaded" if ml_model else "not loaded",
-            "database":       "connected",
+            "api":               "up",
+            "ml_model":          "loaded" if ml_model else "not loaded",
+            "database":          "connected",
+            "gnn":               "enabled" if GNN_AVAILABLE else "disabled",
             "websocket_clients": len(manager.active_connections),
         }
     }
@@ -165,11 +170,32 @@ async def score_transaction_endpoint(request: TransactionRequest):
 
     ml_result = score_transaction(ml_model, txn_for_ml, velocity_for_ml)
 
+    # GNN Score — async thread mein, 2 sec timeout
+    graph_info  = None
     final_score = ml_result["risk_score"]
     final_tier  = ml_result["risk_tier"]
-    graph_info  = None
 
-    # SHAP — HIGH/CRITICAL ke liye
+    if GNN_AVAILABLE:
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            combined = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    combined_score,
+                    ml_result["risk_score"],
+                    request.sender_account,
+                    request.receiver_account,
+                ),
+                timeout=2.0
+            )
+            final_score = combined["final_score"]
+            final_tier  = combined["final_tier"]
+            graph_info  = combined["graph_details"]
+        except Exception:
+            pass
+
+    # SHAP
     explanation = None
     if final_tier in ["HIGH", "CRITICAL"]:
         try:
@@ -201,7 +227,6 @@ async def score_transaction_endpoint(request: TransactionRequest):
 
     processing_ms = int((time.time() - start_time) * 1000)
 
-    # WebSocket broadcast
     await manager.broadcast({
         "type":           "new_transaction",
         "transaction_id": txn_id,

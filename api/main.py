@@ -1,6 +1,8 @@
 # api/main.py
 import sys
 import os
+import asyncio
+import json
 from datetime import datetime
 from typing import Optional
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -14,7 +16,7 @@ sys.path.insert(0, os.path.join(BASE_DIR, "simulator"))
 sys.path.insert(0, os.path.join(BASE_DIR, "gnn_engine"))
 
 # ── Imports ───────────────────────────────────────────────────────
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -22,11 +24,8 @@ from db_setup    import create_tables, insert_transaction, get_all_transactions
 from redis_setup import track_transaction, get_velocity, check_duplicate
 from inference   import load_model, score_transaction, explain_transaction
 
-try:
-    from gnn_scorer import combined_score
-    GNN_AVAILABLE = True
-except Exception:
-    GNN_AVAILABLE = False
+# GNN temporarily disabled — blocking issue fix karna hai
+GNN_AVAILABLE = False
 
 # ── App ───────────────────────────────────────────────────────────
 app = FastAPI(
@@ -42,6 +41,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── WebSocket Connection Manager ──────────────────────────────────
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        print(f"✅ WebSocket connected! Total: {len(self.active_connections)}")
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        print(f"❌ WebSocket disconnected! Total: {len(self.active_connections)}")
+
+    async def broadcast(self, message: dict):
+        disconnected = []
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception:
+                disconnected.append(connection)
+        for conn in disconnected:
+            if conn in self.active_connections:
+                self.active_connections.remove(conn)
+
+manager = ConnectionManager()
 ml_model = None
 
 @app.on_event("startup")
@@ -50,8 +76,7 @@ async def startup_event():
     create_tables()
     ml_model = load_model()
     print("✅ API ready! ML model loaded.")
-    
-# Prometheus metrics
+
 Instrumentator().instrument(app).expose(app)
 
 # ── Schemas ───────────────────────────────────────────────────────
@@ -100,9 +125,10 @@ async def health_check():
         "status":    "healthy",
         "timestamp": datetime.utcnow().isoformat(),
         "services": {
-            "api":      "up",
-            "ml_model": "loaded" if ml_model else "not loaded",
-            "database": "connected",
+            "api":            "up",
+            "ml_model":       "loaded" if ml_model else "not loaded",
+            "database":       "connected",
+            "websocket_clients": len(manager.active_connections),
         }
     }
 
@@ -139,26 +165,11 @@ async def score_transaction_endpoint(request: TransactionRequest):
 
     ml_result = score_transaction(ml_model, txn_for_ml, velocity_for_ml)
 
-    # GNN Score
-    graph_info = None
-    if GNN_AVAILABLE:
-        try:
-            combined   = combined_score(
-                ml_result["risk_score"],
-                request.sender_account,
-                request.receiver_account,
-            )
-            final_score = combined["final_score"]
-            final_tier  = combined["final_tier"]
-            graph_info  = combined["graph_details"]
-        except Exception:
-            final_score = ml_result["risk_score"]
-            final_tier  = ml_result["risk_tier"]
-    else:
-        final_score = ml_result["risk_score"]
-        final_tier  = ml_result["risk_tier"]
+    final_score = ml_result["risk_score"]
+    final_tier  = ml_result["risk_tier"]
+    graph_info  = None
 
-    # SHAP
+    # SHAP — HIGH/CRITICAL ke liye
     explanation = None
     if final_tier in ["HIGH", "CRITICAL"]:
         try:
@@ -189,6 +200,18 @@ async def score_transaction_endpoint(request: TransactionRequest):
     insert_transaction(txn_data)
 
     processing_ms = int((time.time() - start_time) * 1000)
+
+    # WebSocket broadcast
+    await manager.broadcast({
+        "type":           "new_transaction",
+        "transaction_id": txn_id,
+        "risk_score":     final_score,
+        "risk_tier":      final_tier,
+        "amount":         request.amount,
+        "sender":         request.sender_account,
+        "city":           request.city or "Unknown",
+        "timestamp":      datetime.utcnow().isoformat(),
+    })
 
     return ScoreResponse(
         transaction_id = txn_id,
@@ -225,9 +248,10 @@ async def get_stats():
     total = len(rows)
     return {
         "total_transactions": total,
-        "message":   f"{total} transactions processed so far!",
-        "api_status": "running",
-        "ml_model":   "XGBoost v1.0",
+        "message":            f"{total} transactions processed so far!",
+        "api_status":         "running",
+        "ml_model":           "XGBoost v1.0",
+        "websocket_clients":  len(manager.active_connections),
     }
 
 @app.post("/api/v1/feedback")
@@ -250,8 +274,8 @@ async def submit_feedback(request: FeedbackRequest):
         cur.close()
         conn.close()
         return {
-            "success": True,
-            "message": f"Feedback recorded: {request.verdict}",
+            "success":        True,
+            "message":        f"Feedback recorded: {request.verdict}",
             "transaction_id": request.transaction_id,
             "analyst_id":     request.analyst_id,
         }
@@ -311,8 +335,10 @@ async def get_transaction(transaction_id: str):
         cur.close()
         conn.close()
         if not row:
-            raise HTTPException(status_code=404,
-                detail=f"Transaction {transaction_id} not found")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Transaction {transaction_id} not found"
+            )
         tier = row[7]
         recommendations = {
             "LOW": "APPROVE", "MEDIUM": "REVIEW",
@@ -334,3 +360,15 @@ async def get_transaction(transaction_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ── WebSocket Endpoint ────────────────────────────────────────────
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)

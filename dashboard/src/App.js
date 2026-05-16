@@ -1,15 +1,7 @@
-// App.js — Fraud Detection Dashboard v2
-// New features:
-// - Transaction submit form
-// - Cases tab
-// - Tab navigation
-
 import { useState, useEffect } from 'react';
 import './App.css';
 
 const API_URL = 'http://localhost:8000';
-
-// ── Components ────────────────────────────────────────────────────
 
 function KPICard({ label, value, sub, color }) {
   return (
@@ -27,7 +19,6 @@ function RiskBadge({ tier }) {
   );
 }
 
-// ── Transaction Submit Form ───────────────────────────────────────
 function SubmitForm({ onSuccess }) {
   const [form, setForm] = useState({
     transaction_type: 'UPI',
@@ -297,10 +288,8 @@ function SubmitForm({ onSuccess }) {
   );
 }
 
-
-// ── Cases Tab ─────────────────────────────────────────────────────
 function CasesTab() {
-  const [cases, setCases]   = useState([]);
+  const [cases, setCases]     = useState([]);
   const [loading, setLoading] = useState(true);
 
   const fetchCases = async () => {
@@ -327,13 +316,11 @@ function CasesTab() {
           </button>
         </div>
       </div>
-
       {loading ? (
         <div className="loading">Loading cases...</div>
       ) : cases.length === 0 ? (
         <div className="empty">
-          No HIGH/CRITICAL cases yet!
-          Submit a suspicious transaction to see cases here.
+          No HIGH/CRITICAL cases yet! Submit a suspicious transaction.
         </div>
       ) : (
         <table>
@@ -357,11 +344,8 @@ function CasesTab() {
                 </td>
                 <td>
                   <span style={{
-                    background: '#1E3A5F',
-                    color: '#60A5FA',
-                    padding: '2px 8px',
-                    borderRadius: 6,
-                    fontSize: 12,
+                    background: '#1E3A5F', color: '#60A5FA',
+                    padding: '2px 8px', borderRadius: 6, fontSize: 12,
                   }}>
                     {c.transaction_type}
                   </span>
@@ -375,15 +359,11 @@ function CasesTab() {
                 <td>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <div style={{
-                      width: 60,
-                      height: 6,
-                      background: '#334155',
-                      borderRadius: 3,
-                      overflow: 'hidden',
+                      width: 60, height: 6,
+                      background: '#334155', borderRadius: 3, overflow: 'hidden',
                     }}>
                       <div style={{
-                        width: `${c.risk_score}%`,
-                        height: '100%',
+                        width: `${c.risk_score}%`, height: '100%',
                         background: c.risk_tier === 'CRITICAL' ? '#EF4444' : '#F97316',
                         borderRadius: 3,
                       }} />
@@ -393,9 +373,7 @@ function CasesTab() {
                     </span>
                   </div>
                 </td>
-                <td>
-                  <RiskBadge tier={c.risk_tier || 'HIGH'} />
-                </td>
+                <td><RiskBadge tier={c.risk_tier || 'HIGH'} /></td>
                 <td>
                   <span className={
                     c.action_required === 'BLOCK'
@@ -417,7 +395,6 @@ function CasesTab() {
   );
 }
 
-// ── Main App ──────────────────────────────────────────────────────
 function App() {
   const [activeTab, setActiveTab]       = useState('feed');
   const [transactions, setTransactions] = useState([]);
@@ -425,6 +402,7 @@ function App() {
   const [loading, setLoading]           = useState(true);
   const [error, setError]               = useState(null);
   const [lastUpdated, setLastUpdated]   = useState(null);
+  const [wsConnected, setWsConnected]   = useState(false);
 
   const fetchData = async () => {
     try {
@@ -445,10 +423,54 @@ function App() {
     }
   };
 
+  // Auto refresh every 30 seconds
   useEffect(() => {
     fetchData();
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
+  }, []);
+
+  // WebSocket — real-time updates
+  useEffect(() => {
+    const ws = new WebSocket('ws://localhost:8000/ws');
+
+    ws.onopen = () => {
+      console.log('✅ WebSocket connected!');
+      setWsConnected(true);
+      const pingInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send('ping');
+        }
+      }, 30000);
+      ws.pingInterval = pingInterval;
+    };
+
+    ws.onmessage = (event) => {
+      if (event.data === 'pong') return;
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'new_transaction') {
+          fetchData();
+          setLastUpdated(new Date().toLocaleTimeString());
+        }
+      } catch (e) {}
+    };
+
+    ws.onerror = () => {
+      console.log('WebSocket error');
+      setWsConnected(false);
+    };
+
+    ws.onclose = () => {
+      console.log('WebSocket disconnected');
+      setWsConnected(false);
+      if (ws.pingInterval) clearInterval(ws.pingInterval);
+    };
+
+    return () => {
+      if (ws.pingInterval) clearInterval(ws.pingInterval);
+      ws.close();
+    };
   }, []);
 
   const tierCounts = transactions.reduce((acc, txn) => {
@@ -459,12 +481,13 @@ function App() {
 
   return (
     <div>
-      {/* Header */}
       <div className="header">
         <h1>🛡️ Fraud Detection Engine</h1>
         <div className="status">
-          <div className="status-dot"></div>
-          <span>Live</span>
+          <div className="status-dot" style={{
+            background: wsConnected ? '#22C55E' : '#EF4444'
+          }}></div>
+          <span>{wsConnected ? 'Live' : 'Polling'}</span>
           {lastUpdated && <span>· Updated {lastUpdated}</span>}
         </div>
       </div>
@@ -472,7 +495,6 @@ function App() {
       <div className="main">
         {error && <div className="error">⚠️ {error}</div>}
 
-        {/* KPI Cards */}
         <div className="kpi-grid">
           <KPICard label="Total Transactions"
             value={stats?.total_transactions || transactions.length}
@@ -493,7 +515,6 @@ function App() {
             value="XGBoost" sub="v1.0 — Active" color="#8B5CF6" />
         </div>
 
-        {/* Tabs */}
         <div className="tabs">
           {[
             { id: 'feed',   label: '📊 Live Feed' },
@@ -508,7 +529,6 @@ function App() {
           ))}
         </div>
 
-        {/* Tab Content */}
         {activeTab === 'feed' && (
           <div className="section">
             <div className="section-header">
@@ -520,7 +540,6 @@ function App() {
                 </button>
               </div>
             </div>
-
             {loading ? (
               <div className="loading">Loading...</div>
             ) : transactions.length === 0 ? (
@@ -574,11 +593,7 @@ function App() {
         )}
 
         {activeTab === 'cases' && <CasesTab />}
-
-        {activeTab === 'submit' && (
-          <SubmitForm onSuccess={fetchData} />
-        )}
-
+        {activeTab === 'submit' && <SubmitForm onSuccess={fetchData} />}
       </div>
     </div>
   );

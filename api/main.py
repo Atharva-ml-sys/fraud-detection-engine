@@ -24,12 +24,8 @@ from db_setup    import create_tables, insert_transaction, get_all_transactions
 from redis_setup import track_transaction, get_velocity, check_duplicate
 from inference   import load_model, score_transaction, explain_transaction
 
-try:
-    from gnn_scorer import combined_score
-    GNN_AVAILABLE = True
-    print("✅ GNN scorer loaded!")
-except Exception:
-    GNN_AVAILABLE = False
+# GNN disabled — SHAP enabled!
+GNN_AVAILABLE = False
 
 # ── App ───────────────────────────────────────────────────────────
 app = FastAPI(
@@ -132,7 +128,6 @@ async def health_check():
             "api":               "up",
             "ml_model":          "loaded" if ml_model else "not loaded",
             "database":          "connected",
-            "gnn":               "enabled" if GNN_AVAILABLE else "disabled",
             "websocket_clients": len(manager.active_connections),
         }
     }
@@ -168,42 +163,29 @@ async def score_transaction_endpoint(request: TransactionRequest):
         "std_amount":    5000,
     }
 
-    ml_result = score_transaction(ml_model, txn_for_ml, velocity_for_ml)
-
-    # GNN Score — async thread mein, 2 sec timeout
-    graph_info  = None
+    ml_result   = score_transaction(ml_model, txn_for_ml, velocity_for_ml)
     final_score = ml_result["risk_score"]
     final_tier  = ml_result["risk_tier"]
 
-    if GNN_AVAILABLE:
-        try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            combined = await asyncio.wait_for(
-                loop.run_in_executor(
-                    None,
-                    combined_score,
-                    ml_result["risk_score"],
-                    request.sender_account,
-                    request.receiver_account,
-                ),
-                timeout=2.0
-            )
-            final_score = combined["final_score"]
-            final_tier  = combined["final_tier"]
-            graph_info  = combined["graph_details"]
-        except Exception:
-            pass
-
-    # SHAP
+    # SHAP — HIGH/CRITICAL ke liye
     explanation = None
     if final_tier in ["HIGH", "CRITICAL"]:
         try:
-            explanation = explain_transaction(
-                ml_model, txn_for_ml, velocity_for_ml
+            loop = asyncio.get_event_loop()
+            explanation = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    explain_transaction,
+                    ml_model,
+                    txn_for_ml,
+                    velocity_for_ml,
+                ),
+                timeout=10.0
             )
         except Exception:
             explanation = None
+
+    graph_info = None
 
     tier = final_tier
     recommendations = {
@@ -386,7 +368,6 @@ async def get_transaction(transaction_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ── WebSocket Endpoint ────────────────────────────────────────────
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
